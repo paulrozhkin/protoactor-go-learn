@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -261,4 +263,124 @@ func TestBankCreateInvariantAccountSendDepositMessageAndHandleSupervision(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("supervisor did not receive invariant error")
 	}
+}
+
+const correlationHeader = "x-correlation-id"
+
+func LoggingReceiverMiddleware(t *testing.T) actor.ReceiverMiddleware {
+	return func(next actor.ReceiverFunc) actor.ReceiverFunc {
+		return func(
+			ctx actor.ReceiverContext,
+			envelope *actor.MessageEnvelope,
+		) {
+			correlationID := envelope.GetHeader(correlationHeader)
+			if correlationID == "" {
+				correlationID = uuid.NewString()
+				envelope.SetHeader(correlationHeader, correlationID)
+			}
+
+			startedAt := time.Now()
+
+			defer func() {
+				t.Log(
+					"actor handled message",
+					"actor", ctx.Self(),
+					"message", fmt.Sprintf("%T", envelope.Message),
+					"correlation_id", correlationID,
+					"duration", time.Since(startedAt),
+				)
+			}()
+
+			next(ctx, envelope)
+		}
+	}
+}
+
+func LoggingSenderMiddleware(t *testing.T) actor.SenderMiddleware {
+	return func(next actor.SenderFunc) actor.SenderFunc {
+		return func(
+			ctx actor.SenderContext,
+			target *actor.PID,
+			envelope *actor.MessageEnvelope,
+		) {
+			correlationID := envelope.GetHeader(correlationHeader)
+
+			if correlationID == "" {
+				correlationID = uuid.NewString()
+				envelope.SetHeader(correlationHeader, correlationID)
+			}
+
+			t.Log(
+				"actor sending message",
+				"source", ctx.Self(),
+				"target", target,
+				"message", fmt.Sprintf("%T", envelope.Message),
+				"correlation_id", correlationID,
+			)
+
+			next(ctx, target, envelope)
+		}
+	}
+}
+
+func TestBankCreateAccountSendDepositMessageAndGetCorrectResultWithMiddleware(t *testing.T) {
+	system := actor.NewActorSystem()
+	props := actor.PropsFromProducer(
+		func() actor.Actor {
+			return &Bank{}
+		},
+		actor.WithReceiverMiddleware(
+			LoggingReceiverMiddleware(t),
+		),
+		actor.WithSenderMiddleware(
+			LoggingSenderMiddleware(t),
+		),
+	)
+	pid := system.Root.Spawn(props)
+	future := system.Root.RequestFuture(pid, &CreateAccount{
+		FirstName: "Ivan",
+		LastName:  "Ivanov",
+		Balance:   0,
+		RequestID: "request-id-create-account",
+	}, timeout)
+	response, err := future.Result()
+	require.NoError(t, err)
+	require.IsType(t, &GetAccountResponse{}, response)
+	accountId := response.(*GetAccountResponse).AccountId
+	require.Equal(t, &GetAccountResponse{
+		RequestID: "request-id-create-account",
+		AccountId: accountId,
+		FirstName: "Ivan",
+		LastName:  "Ivanov",
+		Balance:   0,
+	}, response)
+
+	future = system.Root.RequestFuture(pid, &DepositRequest{
+		Amount:    5,
+		RequestID: "request-id-deposit",
+		AccountId: accountId}, timeout)
+	response, err = future.Result()
+	require.NoError(t, err)
+	require.IsType(t, &OperationResponse{}, response)
+	require.Equal(t, &OperationResponse{
+		Balance:   5,
+		RequestID: "request-id-deposit",
+		AccountId: accountId,
+		Success:   true,
+	}, response)
+
+	future = system.Root.RequestFuture(pid, &GetAccountRequest{
+		RequestID: "request-id-get-account",
+		AccountId: accountId,
+	}, timeout)
+	response, err = future.Result()
+	require.NoError(t, err)
+	require.IsType(t, &GetAccountResponse{}, response)
+	require.Equal(t, &GetAccountResponse{
+		FirstName: "Ivan",
+		LastName:  "Ivanov",
+		Balance:   5,
+		RequestID: "request-id-get-account",
+		AccountId: accountId,
+	}, response)
 }

@@ -6,3 +6,4 @@
 2. Взаимодействие с Bank через actor model
 3. Поддержка Supervision для инварианта Bank Account (если счет меньше нуля)
 4. Внедрен Behavior для осуществления Internal Transaction между двумя Bank Account
+5. Работа с Middleware
