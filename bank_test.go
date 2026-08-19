@@ -214,14 +214,14 @@ func TestBankCreateMultipleAccountSendDepositMessageAndMakeTransfer(t *testing.T
 
 func TestBankCreateInvariantAccountSendDepositMessageAndHandleSupervision(t *testing.T) {
 	system := actor.NewActorSystem()
-	isInvariantReceived := false
+	invariantReceived := make(chan any, 1)
 	strategy := actor.NewOneForOneStrategy(
 		3,
 		10*time.Second,
 		func(reason any) actor.Directive {
 			switch reason {
 			case InvariantError:
-				isInvariantReceived = true
+				invariantReceived <- reason
 				t.Logf("invariant error received: %v", reason)
 				return actor.StopDirective
 			}
@@ -254,8 +254,11 @@ func TestBankCreateInvariantAccountSendDepositMessageAndHandleSupervision(t *tes
 		Amount:    5,
 		RequestID: "request-id-withdraw",
 		AccountId: accountId}, time.Second)
-	err = future.Wait()
-	require.Error(t, err)
-	//time.Sleep(time.Second * 5)
-	require.True(t, isInvariantReceived)
+	select {
+	case reason := <-invariantReceived:
+		require.Equal(t, InvariantError, reason)
+
+	case <-time.After(time.Second):
+		t.Fatal("supervisor did not receive invariant error")
+	}
 }
