@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/stretchr/testify/require"
@@ -209,4 +210,52 @@ func TestBankCreateMultipleAccountSendDepositMessageAndMakeTransfer(t *testing.T
 		RequestID: "request-id-get-account",
 		AccountId: accountIdRecipient,
 	}, response)
+}
+
+func TestBankCreateInvariantAccountSendDepositMessageAndHandleSupervision(t *testing.T) {
+	system := actor.NewActorSystem()
+	isInvariantReceived := false
+	strategy := actor.NewOneForOneStrategy(
+		3,
+		10*time.Second,
+		func(reason any) actor.Directive {
+			switch reason {
+			case InvariantError:
+				isInvariantReceived = true
+				t.Logf("invariant error received: %v", reason)
+				return actor.StopDirective
+			}
+			t.Logf("supervisor received: %v", reason)
+			return actor.RestartDirective
+		},
+	)
+
+	props := actor.PropsFromProducer(func() actor.Actor { return &Bank{} }, actor.WithSupervisor(strategy))
+	pid := system.Root.Spawn(props)
+	future := system.Root.RequestFuture(pid, &CreateAccount{
+		FirstName: "Ivan",
+		LastName:  "Ivanov",
+		Balance:   -10,
+		RequestID: "request-id-create-account",
+	}, timeout)
+	response, err := future.Result()
+	require.NoError(t, err)
+	require.IsType(t, &GetAccountResponse{}, response)
+	accountId := response.(*GetAccountResponse).AccountId
+	require.Equal(t, &GetAccountResponse{
+		RequestID: "request-id-create-account",
+		AccountId: accountId,
+		FirstName: "Ivan",
+		LastName:  "Ivanov",
+		Balance:   -10,
+	}, response)
+
+	future = system.Root.RequestFuture(pid, &WithdrawRequest{
+		Amount:    5,
+		RequestID: "request-id-withdraw",
+		AccountId: accountId}, time.Second)
+	err = future.Wait()
+	require.Error(t, err)
+	//time.Sleep(time.Second * 5)
+	require.True(t, isInvariantReceived)
 }

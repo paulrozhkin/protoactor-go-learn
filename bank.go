@@ -11,63 +11,38 @@ var timeout = 5 * time.Second
 
 type Bank struct {
 	accounts map[string]*actor.PID
-	pending  map[string]*actor.PID
 }
 
 func (b *Bank) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		b.accounts = make(map[string]*actor.PID)
-		b.pending = make(map[string]*actor.PID)
 	case *CreateAccount:
 		pid := ctx.Spawn(actor.PropsFromProducer(func() actor.Actor { return &BankAccount{} }))
 		accountId := uuid.NewString()
 		b.accounts[accountId] = pid
-		b.pending[msg.RequestID] = ctx.Sender()
-		ctx.Request(pid, &CreateAccount{
-			RequestID: msg.RequestID,
-			AccountId: accountId,
-			FirstName: msg.FirstName,
-			LastName:  msg.LastName,
-			Balance:   msg.Balance,
-		})
+		msg.AccountId = accountId
+		ctx.Forward(pid)
 	case *GetAccountRequest:
 		accountPid, ok := b.accounts[msg.AccountId]
 		if !ok {
 			ctx.Respond(AccountNotFound)
 		}
-		b.pending[msg.RequestID] = ctx.Sender()
-		ctx.Request(accountPid, msg)
-	case *GetAccountResponse:
-		originalSender, ok := b.pending[msg.RequestID]
-		if !ok {
-			return
-		}
-		delete(b.pending, msg.RequestID)
-		ctx.Request(originalSender, msg)
+		ctx.Forward(accountPid)
 	case *DepositRequest:
 		accountPid, ok := b.accounts[msg.AccountId]
 		if !ok {
 			ctx.Respond(AccountNotFound)
 		}
-		b.pending[msg.RequestID] = ctx.Sender()
-		ctx.Request(accountPid, msg)
+		ctx.Forward(accountPid)
 	case *WithdrawRequest:
 		accountPid, ok := b.accounts[msg.AccountId]
 		if !ok {
 			ctx.Respond(AccountNotFound)
 		}
-		b.pending[msg.RequestID] = ctx.Sender()
-		ctx.Request(accountPid, msg)
+		ctx.Forward(accountPid)
 	case *InternalTransfer:
 		b.makeInternalTransferInBlockingMode(ctx, msg)
-	case *OperationResponse:
-		originalSender, ok := b.pending[msg.RequestID]
-		if !ok {
-			return
-		}
-		delete(b.pending, msg.RequestID)
-		ctx.Request(originalSender, msg)
 	}
 }
 

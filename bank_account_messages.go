@@ -5,6 +5,7 @@ import "errors"
 var (
 	AccountNotFound = errors.New("account not found")
 	UnknownError    = errors.New("unknown error")
+	InvariantError  = errors.New("invariant error")
 )
 
 type CreateAccount struct {

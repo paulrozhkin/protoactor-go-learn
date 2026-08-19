@@ -42,6 +42,9 @@ func (b *BankAccount) Receive(ctx actor.Context) {
 			Balance:   b.Balance,
 		})
 	case *WithdrawRequest:
+		if b.Balance < 0 {
+			panic(InvariantError)
+		}
 		response := &OperationResponse{RequestID: msg.RequestID,
 			AccountId: b.AccountId}
 		if b.Balance-msg.Amount > 0 {
